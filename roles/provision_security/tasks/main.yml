@@ -1,0 +1,81 @@
+---
+# Role: provision_security
+# Purpose: Automate MongoDB Atlas Security Provisioning through REST API calls.
+# This version uses environment variables already configured in AAP, ensuring no secrets are stored in files.
+
+- name: Get Entra group object ID
+  # Step 1: Retrieve Azure Entra (AD) group details from MongoDB Atlas API.
+  uri:                                             # 'uri' module is used to make HTTP REST API requests
+    url: "https://atlas.mongodb.com/api/atlas/v1.0/groups/{{ lookup('env','ENTRA_GROUP_NAME') }}"
+    # The API endpoint to fetch details for the specified Entra Group name.
+    method: GET                                   # Using GET to read data
+    headers:
+      Accept: "application/json"                  # Expect JSON-formatted response
+      Authorization: "Basic {{ (lookup('env','ATLAS_PUBLIC_KEY') + ':' + lookup('env','ATLAS_PRIVATE_KEY')) | b64encode }}"
+      # MongoDB Atlas API uses Basic Auth. Public and private keys are joined, then Base64 encoded.
+  register: group_lookup                          # Store the API response in variable 'group_lookup'
+  failed_when: group_lookup.status not in [200]   # Fail this task if HTTP status is not 200 (OK)
+  no_log: true                                    # Hide sensitive API keys from logs
+
+- name: Display retrieved group info
+  # Step 2: Display the returned Entra Group data from MongoDB Atlas (for debugging and verification).
+  debug:
+    var: group_lookup.json                        # Print out the full JSON response
+
+- name: Assign roles to Entra group
+  # Step 3: Assign defined roles (organization and project) to the specified Entra group.
+  uri:
+    url: "https://atlas.mongodb.com/api/atlas/v1.0/orgs/{{ lookup('env','ORG_ID') }}/accessList"
+    # This is the MongoDB Atlas endpoint for updating organization-level access control.
+    method: POST                                 # POST request used to add new access entries
+    headers:
+      Content-Type: "application/json"           # Send request body as JSON
+      Authorization: "Basic {{ (lookup('env','ATLAS_PUBLIC_KEY') + ':' + lookup('env','ATLAS_PRIVATE_KEY')) | b64encode }}"
+      # Use Base64 encoded authentication again for security
+    body_format: json                            # The request payload is in JSON format
+    body:                                        # The JSON data sent to MongoDB Atlas API
+      groupId: "{{ group_lookup.json.id }}"      # Use group ID retrieved from first task
+      roles:                                     # Assign both organization and project-level roles
+        org_roles:
+          - Organization Member
+          - Organization Read Only
+        project_roles:
+          - None - Organization access only
+          - Project Read Only
+  register: role_assignment                      # Save API response in 'role_assignment'
+  failed_when: role_assignment.status not in [200,201]  # Fail if response isn't success (200/201)
+  no_log: true                                   # Mask credentials in logs for security
+
+- name: Generate CSV file for role mappings
+  # Step 4: Create a local CSV summary of the assigned roles for auditing.
+  copy:
+    dest: "/tmp/role_mappings.csv"               # Save the CSV file in /tmp directory on AAP node
+    content: |                                  # Multiline text block for CSV content
+      Role,Level                                # Header row for CSV file
+      Organization Member,Organization          # Organization-level role entry
+      Organization Read Only,Organization       # Organization-level role entry
+      None - Organization access only,Project   # Project-level role entry
+      Project Read Only,Project                 # Project-level role entry
+
+- name: Send provisioning status email
+  # Step 5: Send an email notification with the CSV attached summarizing results.
+  mail:
+    host: "{{ lookup('env','SMTP_HOST') }}"      # SMTP server hostname from environment variable
+    port: "{{ lookup('env','SMTP_PORT') | int }}"# SMTP server port (convert to integer)
+    username: "{{ lookup('env','SMTP_USER') }}"  # SMTP username (sender email)
+    password: "{{ lookup('env','SMTP_PASS') }}"  # SMTP password or app-specific password
+    to:
+      - "{{ lookup('env','NOTIFICATION_EMAIL') }}"  # Recipient email
+    subject: "MongoDB Atlas Security Provisioning - Completed"  # Email subject line
+    body: |                                      # Multiline message body for email content
+      Hello Team,
+
+      The MongoDB Atlas security provisioning for the group '{{ lookup('env','ENTRA_GROUP_NAME') }}' has been completed.
+
+      MongoDB Atlas API Response Code: {{ role_assignment.status }}
+
+      Regards,
+      Ansible Automation Platform
+    attach:
+      - /tmp/role_mappings.csv                   # Attach the CSV report created above
+  no_log: true                                   # Hide SMTP credentials and sensitive info from job logs

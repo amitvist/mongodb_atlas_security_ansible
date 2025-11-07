@@ -1,0 +1,9 @@
+---
+# AAP inventory definition
+# This defines the target where the playbook will execute.
+# In this case, it runs on the same node as the AAP controller.
+
+all:
+  hosts:
+    localhost:                                   # The only host target is localhost
+      ansible_connection: local                  # Use local connection (no SSH)

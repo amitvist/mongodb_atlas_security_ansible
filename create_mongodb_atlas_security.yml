@@ -1,0 +1,11 @@
+---
+# Main playbook for MongoDB Atlas Security Provisioning using Ansible Automation Platform (AAP)
+# This playbook runs locally and executes a role that automates MongoDB Atlas role assignment.
+
+- name: MongoDB Atlas Security Provisioning         # A friendly name describing what this playbook does
+  hosts: localhost                                 # Run this playbook on the AAP controller node itself
+  connection: local                                # Use local connection (no SSH needed)
+  gather_facts: no                                 # Skip gathering system facts for faster execution
+
+  roles:                                           # Define which roles will be executed in this playbook
+    - role: provision_security                     # The 'provision_security' role handles the actual logic
